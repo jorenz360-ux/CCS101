@@ -3,9 +3,330 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Hello World</title>
+    <title>Signal</title>
+    <style>
+      :root {
+        --bg: #0a0d12;
+        --bg-2: #0f141b;
+        --node: #6fe3c4;
+        --node-dim: #2c7a68;
+        --accent: #ff6b4a;
+        --text: #e8ecef;
+        --text-dim: #6b7680;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        background: radial-gradient(ellipse at 50% 30%, var(--bg-2), var(--bg));
+        overflow: hidden;
+        font-family: "Courier New", ui-monospace, monospace;
+      }
+      canvas {
+        position: fixed;
+        inset: 0;
+        display: block;
+      }
+
+      .hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: clamp(20px, 4vw, 56px);
+        color: var(--text);
+      }
+
+      .top-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        font-size: 11px;
+        letter-spacing: 0.15em;
+        color: var(--text-dim);
+        text-transform: uppercase;
+      }
+      .top-row span.live {
+        color: var(--node);
+      }
+      .live::before {
+        content: "";
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--node);
+        margin-right: 8px;
+        box-shadow: 0 0 8px var(--node);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+
+      .title-block {
+        max-width: 720px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 14px;
+        opacity: 0;
+        animation: rise 0.8s ease-out 0.2s forwards;
+      }
+      h1 {
+        font-family: Georgia, "Times New Roman", serif;
+        font-weight: 400;
+        font-size: clamp(32px, 6vw, 64px);
+        line-height: 1.05;
+        letter-spacing: -0.01em;
+        color: var(--text);
+        opacity: 0;
+        animation: rise 0.9s ease-out 0.4s forwards;
+      }
+      h1 em {
+        font-style: italic;
+        color: var(--node);
+      }
+      p.sub {
+        margin-top: 18px;
+        max-width: 480px;
+        font-size: 14px;
+        line-height: 1.7;
+        color: var(--text-dim);
+        opacity: 0;
+        animation: rise 0.9s ease-out 0.6s forwards;
+      }
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .bottom-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        font-size: 11px;
+        color: var(--text-dim);
+        letter-spacing: 0.1em;
+      }
+      .coords {
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .eyebrow,
+        h1,
+        p.sub {
+          animation: none;
+          opacity: 1;
+        }
+      }
+    </style>
   </head>
   <body>
-    <h1>Hello, World</h1>
+    <canvas id="c"></canvas>
+
+    <div class="hud">
+      <div class="top-row">
+        <span class="live">node network / active</span>
+        <span id="clock">00:00:00</span>
+      </div>
+
+      <div class="title-block">
+        <div class="eyebrow">Ambient Signal · 001</div>
+        <h1>Every node<br />is listening for <em>something.</em></h1>
+        <p class="sub">
+          A field of points drifts and reaches for its nearest neighbors —
+          connections form, hold, and let go, the way a network finds its own
+          shape without being told to.
+        </p>
+      </div>
+
+      <div class="bottom-row">
+        <span>move to disturb the field</span>
+        <span class="coords" id="coords">x:0000 y:0000</span>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const canvas = document.getElementById("c");
+        const ctx = canvas.getContext("2d");
+        let W, H, DPR;
+        const reduceMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+
+        function resize() {
+          DPR = Math.min(window.devicePixelRatio || 1, 2);
+          W = window.innerWidth;
+          H = window.innerHeight;
+          canvas.width = W * DPR;
+          canvas.height = H * DPR;
+          canvas.style.width = W + "px";
+          canvas.style.height = H + "px";
+          ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        }
+        window.addEventListener("resize", resize);
+        resize();
+
+        const COUNT = Math.max(
+          40,
+          Math.min(
+            110,
+            Math.floor((window.innerWidth * window.innerHeight) / 16000),
+          ),
+        );
+        const LINK_DIST = 150;
+        const mouse = { x: -9999, y: -9999, active: false };
+
+        const nodes = [];
+        for (let i = 0; i < COUNT; i++) {
+          nodes.push({
+            x: Math.random() * W,
+            y: Math.random() * H,
+            vx: (Math.random() - 0.5) * 0.25,
+            vy: (Math.random() - 0.5) * 0.25,
+            r: Math.random() * 1.6 + 0.8,
+            pulse: Math.random() * Math.PI * 2,
+          });
+        }
+
+        window.addEventListener("pointermove", (e) => {
+          mouse.x = e.clientX;
+          mouse.y = e.clientY;
+          mouse.active = true;
+          document.getElementById("coords").textContent =
+            "x:" +
+            String(Math.floor(e.clientX)).padStart(4, "0") +
+            " y:" +
+            String(Math.floor(e.clientY)).padStart(4, "0");
+        });
+        window.addEventListener("pointerleave", () => {
+          mouse.active = false;
+        });
+
+        function step(t) {
+          ctx.clearRect(0, 0, W, H);
+
+          // update
+          for (const n of nodes) {
+            n.x += n.vx;
+            n.y += n.vy;
+            n.pulse += 0.015;
+
+            if (n.x < -20) n.x = W + 20;
+            if (n.x > W + 20) n.x = -20;
+            if (n.y < -20) n.y = H + 20;
+            if (n.y > H + 20) n.y = -20;
+
+            if (mouse.active) {
+              const dx = n.x - mouse.x,
+                dy = n.y - mouse.y;
+              const d2 = dx * dx + dy * dy;
+              const R = 130;
+              if (d2 < R * R) {
+                const d = Math.sqrt(d2) || 1;
+                const f = (1 - d / R) * 0.6;
+                n.vx += (dx / d) * f * 0.06;
+                n.vy += (dy / d) * f * 0.06;
+              }
+            }
+
+            // gentle drag
+            n.vx *= 0.995;
+            n.vy *= 0.995;
+          }
+
+          // links
+          for (let i = 0; i < nodes.length; i++) {
+            for (let j = i + 1; j < nodes.length; j++) {
+              const a = nodes[i],
+                b = nodes[j];
+              const dx = a.x - b.x,
+                dy = a.y - b.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < LINK_DIST) {
+                const alpha = (1 - dist / LINK_DIST) * 0.35;
+                ctx.strokeStyle = `rgba(111, 227, 196, ${alpha})`;
+                ctx.lineWidth = 0.6;
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.stroke();
+              }
+            }
+          }
+
+          // nodes
+          for (const n of nodes) {
+            const glow = 0.5 + Math.sin(n.pulse) * 0.5;
+            ctx.beginPath();
+            ctx.fillStyle = `rgba(111, 227, 196, ${0.5 + glow * 0.5})`;
+            ctx.arc(n.x, n.y, n.r + glow * 0.6, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // mouse halo
+          if (mouse.active) {
+            const grad = ctx.createRadialGradient(
+              mouse.x,
+              mouse.y,
+              0,
+              mouse.x,
+              mouse.y,
+              130,
+            );
+            grad.addColorStop(0, "rgba(255, 107, 74, 0.08)");
+            grad.addColorStop(1, "rgba(255, 107, 74, 0)");
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(mouse.x, mouse.y, 130, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (!reduceMotion) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+        if (reduceMotion) {
+          // draw a single static frame, no loop
+        }
+
+        // clock
+        function tick() {
+          const d = new Date();
+          document.getElementById("clock").textContent =
+            String(d.getHours()).padStart(2, "0") +
+            ":" +
+            String(d.getMinutes()).padStart(2, "0") +
+            ":" +
+            String(d.getSeconds()).padStart(2, "0");
+        }
+        tick();
+        setInterval(tick, 1000);
+      })();
+    </script>
   </body>
 </html>
